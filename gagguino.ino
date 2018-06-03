@@ -55,6 +55,7 @@
 
 SSD1306AsciiWire oled;
 Adafruit_MAX31865 max = Adafruit_MAX31865(SPI_MAX_SS);
+WiFiServer server(80);
 
 // debugging flags
 
@@ -62,7 +63,8 @@ boolean writeDebug = false;
 boolean plotData = true;
 boolean debugPID = false;
 boolean useSavedGain = false;
-boolean useWifi = true;
+boolean useWifi = false;
+boolean useSD = true;
 
 // system setup
 int spiSlaves[SPI_SLAVES];
@@ -70,6 +72,10 @@ int spiSlaves[SPI_SLAVES];
 char ssid[] = "Dlink12";     //  your network SSID (name) 
 char pass[] = "4d9a4d4652";    // your network password
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
+
+File logFile;
+char data[] = "";
+char fileName[] = "TEST.CSV";
 
 // PID variables
 float currTemp;
@@ -82,15 +88,14 @@ float dGain;
 
 float iState;
 
-boolean heaterState;
-
 float heatPower = 0;
 int heatCycles = 0;
+boolean heaterState;
 
 unsigned long currentTime;
 unsigned long lastPID;
 unsigned long lastPWM;
-unsigned long lastPress;
+unsigned long lastPressTime;
 
 long elapsedTime = 0;
  
@@ -115,12 +120,7 @@ void setup() {
   pinMode(FLOW_PIN, INPUT);
   
   spiSlaveSelect(SPI_SD_SS);
-  
-  if (!SD.begin(SPI_SD_SS)) {
-    Serial.println("SD initialization failed!");
-    return;
-  }
- 
+   
   Wire.begin();
   Wire.setClock(400000L);
   oled.begin(&Adafruit128x64, I2C_ADDRESS);
@@ -129,29 +129,48 @@ void setup() {
   _turnHeatElementOnOff(0); 
 
   if (useWifi){
-      spiSlaveSelect(SPI_WIFI_SS);
+    spiSlaveSelect(SPI_WIFI_SS);
     oled.println("Connecting to Wifi");
     oled.print("Network: ");
     oled.println(ssid);
-    oled.println();
+    Serial.println("Connecting to Wifi ");
+    Serial.print("Network: ");
+    Serial.println(ssid);
 
     status = WiFi.begin(ssid, pass);
 
     if ( status != WL_CONNECTED) { 
       oled.println("FAILED");
+      Serial.println("FAILED");
       useWifi = false;
     } 
   // if you are connected, print out info about the connection:
     else {
-      oled.println("CONNECTED");
-      oled.println();
+      oled.println("CONNECTED as ");
+      Serial.println("CONNECTED as ");
   // print your WiFi shield's IP address:
       IPAddress ip = WiFi.localIP();
-      oled.print("IP Address: ");
       oled.println(ip);
-   }
+      Serial.println(ip);
+      server.begin();
+
+      if (useSD){
+        oled.print("SD Card init: ");
+        Serial.print("SD Card init: ");
+        if (!SD.begin(SPI_SD_SS)) {
+          oled.println("FAIL");
+          Serial.println("FAIL");
+          useSD = false;
+        } else { 
+          oled.println("OK");
+          Serial.println("OK");
+        }
+        setupLogFile();
+      }
+    }   
   } else {
       oled.print("WiFi Disabled");
+      Serial.print("WiFi Disabled");
   }
  
   spiSlaveSelect(SPI_MAX_SS);  
@@ -212,10 +231,12 @@ void loop() {
   float         tempRTD;  
   float         tempSum = 0;
   int           tempCount = 0;
-  int           pressCount = 0;
+
+  float         pressGauge;
   float         pressSum = 0;
+  int           pressCount = 0;
   float         currPress;
-  
+  float         lastPress;
   
   tempRTD = max.temperature(RNOMINAL, RREF);
   //  maxFaults();
@@ -227,43 +248,43 @@ void loop() {
     currTemp = tempSum / tempCount;
   }
 
-  pressSum += analogRead(PRESSURE_PIN) * 0.05476 -5.1;
+  pressGauge = analogRead(PRESSURE_PIN) * 0.05476 -5.1;
+  pressSum += pressGauge;
   pressCount ++;
   currPress = pressSum / pressCount;
 
-  dispTempPress(currTemp, currPress);
-
-  if (writeDebug){
-    Serial.print(tempCount);
-    Serial.print(" ");
-    Serial.print(tempRTD);
-    Serial.print(" ");
-    Serial.print(tempSum);
-    Serial.print(" ");
-    Serial.println(currTemp);
-  }
-
   if (plotData){
-    Serial.print(currentTime);
-    Serial.print(" ");
+ //   Serial.print(currentTime);
+ //   Serial.print(" ");
     Serial.print(setTemp);
+    Serial.print(" ");
+    Serial.print(tempRTD);    
     Serial.print(" ");
     Serial.print(currTemp);    
     Serial.print(" ");
-    Serial.print(currPress);    
-    Serial.print(" ");
+    Serial.println(lastTemp);    
   }
+
+//  if (useSD){
+//    writeSD(currentTime, setTemp, tempRTD, 
+//  }
   
   if (currentTime - lastPID >= PID_CYCLE){
     lastPID = currentTime;
     heatPower = updatePID();
     
+    dispTempPress(currTemp, lastPress);
+
     tempSum = 0;
     tempCount = 0;
   }
 
-  if (currentTime - lastPress >= PRESS_CYCLE){
-    lastPress = currentTime;
+  if (currentTime - lastPressTime >= PRESS_CYCLE){
+    lastPressTime = currentTime;
+
+    dispTempPress(currPress, lastTemp);
+
+    lastPress = currPress;
     pressSum = 0;
     pressCount = 0;
   }
@@ -494,6 +515,34 @@ void dispTempPress(float t, float p){
 void spiSlaveSelect(int ss){
   for (int i = 0; i < SPI_SLAVES; i++){
     digitalWrite(spiSlaves[i],!(ss == i));
+  }
+}
+
+void setupLogFile(){
+
+  oled.print("Log init: ");
+  Serial.print("Log init file ");
+  Serial.print(fileName);
+  Serial.print(": ");
+  
+  logFile = SD.open(fileName, FILE_WRITE);
+
+  if(logFile){
+    // send a standard http response header
+    logFile.println("HTTP/1.1 200 OK");
+    logFile.println("Content-Type: text/html");
+    logFile.println("Connnection: close");
+    logFile.println();
+    logFile.println("<!DOCTYPE HTML>");
+    logFile.println("<html>");
+    // add a meta refresh tag, so the browser pulls again every 5 seconds:
+    logFile.println("<meta http-equiv=\"refresh\" content=\"5\">");
+    logFile.close();
+    oled.println("OK");
+    Serial.println("OK");
+  } else {
+    Serial.println("FAIL");
+    oled.println("FAIL");
   }
 }
 
