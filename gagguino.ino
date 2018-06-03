@@ -42,10 +42,10 @@
 
 //PID Gains
 #define BREW_TEMP           103.0
-#define WINDUP_GUARD_GAIN      35
-#define P_GAIN                  5
-#define I_GAIN                 0
-#define D_GAIN                 00
+#define WINDUP_GUARD           25
+#define P_GAIN                 10
+#define I_GAIN                  1
+#define D_GAIN                 10
 
 #define PGAIN_ADR               0
 #define IGAIN_ADR               4
@@ -59,15 +59,17 @@ WiFiServer server(80);
 
 // debugging flags
 
-boolean writeDebug = false;
-boolean plotData = true;
-boolean debugPID = false;
+boolean writeDebug   = false;
+boolean plotData     = false;
+boolean ardPlot      = false;
+boolean debugPID     = false;
 boolean useSavedGain = false;
-boolean useWifi = false;
-boolean useSD = true;
+boolean useWifi      = false;
+boolean useSD        = true;
 
 // system setup
 int spiSlaves[SPI_SLAVES];
+int activeSlave;
 
 char ssid[] = "Dlink12";     //  your network SSID (name) 
 char pass[] = "4d9a4d4652";    // your network password
@@ -81,6 +83,7 @@ char fileName[] = "TEST.CSV";
 float currTemp;
 float setTemp;
 float lastTemp;
+float lastPress;
 
 float pGain;
 float iGain;
@@ -155,31 +158,51 @@ void setup() {
       oled.println(ip);
       if(!plotData){Serial.println(ip);}
       server.begin();
-
-      if (useSD){
-        oled.print("SD Card init: ");
-        if(!plotData){Serial.print("SD Card init: ");}
-        if (!SD.begin(SPI_SD_SS)) {
-          oled.println("FAIL");
-          if(!plotData){Serial.println("FAIL");}
-          useSD = false;
-        } else { 
-          oled.println("OK");
-          if(!plotData){Serial.println("OK");}
-        }
-        setupLogFile();
-      }
     }   
   } else {
-      oled.print("WiFi Disabled");
-      if(!plotData){Serial.print("WiFi Disabled");}
+      oled.println("WiFi Disabled");
+      if(!plotData){Serial.println("WiFi Disabled");}
   }
+
+  if (useSD){
+    spiSlaveSelect(SPI_SD_SS);
+    oled.print("SD Card init: ");
+    if(!plotData){Serial.print("SD Card init: ");}
+    if (!SD.begin(SPI_SD_SS)) {
+      oled.println("FAIL");
+      if(!plotData){Serial.println("FAIL");}
+      useSD = false;
+    } else { 
+      oled.println("OK");
+      if(!plotData){Serial.println("OK");}
+      oled.print("Log init: ");
+      if(!plotData){Serial.print("Log init:     ");}
+      logFile = SD.open(fileName, FILE_WRITE);
+      if(logFile){
+        logFile.close();
+        oled.println("OK");
+        if(!plotData){Serial.println("OK");}
+      } else {
+        if(!plotData){Serial.println("FAIL");}
+        oled.println("FAIL");
+      } 
+    }
+  }
+  
  
   spiSlaveSelect(SPI_MAX_SS);  
-  max.begin(MAX31865_2WIRE);  // set to 2WIRE or 4WIRE as necessary
-  
-  if (!plotData){Serial.println("MAX31865: 2 Wire mode initialised");}
+  oled.print("MAX31865 (2):");
+  if(!plotData){Serial.print("MAX31865 (2):");}
 
+  if (max.begin(MAX31865_2WIRE)){
+    oled.println("OK");
+    if(!plotData){Serial.println("OK");}
+  } else {
+    oled.println("FAIL");
+    if(!plotData){Serial.println("FAIL");}    
+  }
+  
+  
   lastPID = millis();
   lastPWM = millis();
   setTemp = BREW_TEMP;
@@ -240,8 +263,9 @@ void loop() {
   float         pressSum = 0;
   int           pressCount = 0;
   float         currPress;
-  float         lastPress;
+
   
+  spiSlaveSelect(SPI_MAX_SS);
   tempRTD = max.temperature(RNOMINAL, RREF);
   //  maxFaults();
 
@@ -258,20 +282,29 @@ void loop() {
   currPress = pressSum / pressCount;
 
   if (plotData){
- //   Serial.print(currentTime);
- //   Serial.print(" ");
+    if(!ardPlot){
+      Serial.print(currentTime);
+      Serial.print(" ");
+      Serial.print(currPress);
+      Serial.print(" ");
+      Serial.print(lastPress);
+      Serial.print(" ");
+      Serial.print(heatPower);
+      Serial.print(" ");
+    }
     Serial.print(setTemp);
     Serial.print(" ");
     Serial.print(tempRTD);    
     Serial.print(" ");
     Serial.print(currTemp);    
     Serial.print(" ");
-    Serial.print(lastTemp);    
+    Serial.println(lastTemp);        
   }
 
-//  if (useSD){
-//    writeSD(currentTime, setTemp, tempRTD, 
-//  }
+  if (useSD){
+    spiSlaveSelect(SPI_SD_SS);
+    writeSD(currentTime, setTemp, tempRTD, pressGauge, 0);
+  }
   
   if (currentTime - lastPID >= PID_CYCLE){
     lastPID = currentTime;
@@ -286,7 +319,7 @@ void loop() {
   if (currentTime - lastPressTime >= PRESS_CYCLE){
     lastPressTime = currentTime;
 
-    dispTempPress(currPress, lastTemp);
+    dispTempPress(lastTemp, currPress);
 
     lastPress = currPress;
     pressSum = 0;
@@ -295,11 +328,6 @@ void loop() {
   
   setHeatCycles(heatPower);
   updatePWM();
-  
-  if (plotData){
-//    Serial.println(heatPower);    
-    Serial.println();    
-  }
 }
 
 
@@ -314,7 +342,6 @@ float updatePID(){
   // these local variables can be factored out if memory is an issue, 
   // but they make it more readable
   float err;
-  float windupGuard;
   float pTerm;
   float iTerm;
   float dTerm;
@@ -337,12 +364,11 @@ float updatePID(){
 
   // not necessary, but this makes windup guard values 
   // relative to the current iGain
-  windupGuard = WINDUP_GUARD_GAIN / iGain;  
-
-  if (iState > windupGuard) 
-    iState = windupGuard;
-  else if (iState < -windupGuard) 
-    iState = -windupGuard;
+  
+  if (iState > WINDUP_GUARD) 
+    iState = WINDUP_GUARD;
+  else if (iState < -WINDUP_GUARD) 
+    iState = -WINDUP_GUARD;
   iTerm = iGain * iState;
 
   // the dTerm, the difference between the temperature now
@@ -383,16 +409,6 @@ void updatePWM()
     // begin cycle
     _turnHeatElementOnOff(1);  // 
     lastPWM = currentTime;   
-
-  if (!plotData and !debugPID){
-    Serial.print(currTemp);
-    Serial.print(" ");
-    Serial.print(setTemp);
-    Serial.print(" ");
-    Serial.print(heatPower);
-    Serial.print(" ");
-    Serial.println(heatCycles);
-    }
   } 
   
   if (currentTime - lastPWM >= heatCycles) {
@@ -452,11 +468,10 @@ void writeFloat(float value, int address) {
   eeprom_write_block((void *) &value, (unsigned char *) address ,4);
 }
 
-//void printVal(){
-void printVal(float v, int d, int p){
+void printValOled(float v, int d, int p){
 //prints value v at x,y with d decimals and p before the point
   int l ;
-  
+
   if (v <= 1){
     l = 1;
   } else {
@@ -468,6 +483,22 @@ void printVal(float v, int d, int p){
   }
 
   oled.print(v,d);
+}
+
+void printValLogFile(float v, int d, int p){
+  int l ;
+
+  if (v <= 1){
+    l = 1;
+  } else {
+    l = int(log10(v)) + 1;
+  }
+  
+  for (int i = p; i > l; i--){
+    logFile.print(" ");
+  }
+
+  logFile.print(v,d);
 }
 
 void dispTempPress(float t, float p){
@@ -492,7 +523,7 @@ void dispTempPress(float t, float p){
   oled.set1X();
   oled.print(" Temp:");
   oled.set2X();
-  printVal(t, 1, 3);
+  printValOled(t, 1, 3);
   oled.set1X();
   oled.setCursor(96,1);
   oled.print(deg);
@@ -501,7 +532,7 @@ void dispTempPress(float t, float p){
   oled.println();
   oled.print(" Press: ");
   oled.set2X();
-  printVal(p, 1, 2);
+  printValOled(p, 1, 2);
   oled.set1X();
   oled.setCursor(96,4);
   oled.println(" barg");
@@ -509,7 +540,7 @@ void dispTempPress(float t, float p){
   oled.println();
   oled.print(" Flow:  ");
   oled.set2X();
-  printVal(0, 1, 2);
+  printValOled(0, 1, 2);
   oled.set1X();
   oled.setCursor(96,7);
   oled.println(" ml");
@@ -520,6 +551,7 @@ void spiSlaveSelect(int ss){
   for (int i = 0; i < SPI_SLAVES; i++){
     digitalWrite(spiSlaves[i],!(ss == i));
   }
+  activeSlave = ss;
 }
 
 void setupLogFile(){
@@ -533,6 +565,8 @@ void setupLogFile(){
   
   logFile = SD.open(fileName, FILE_WRITE);
 
+  delay(100);
+  
   if(logFile){
     // send a standard http response header
     logFile.println("HTTP/1.1 200 OK");
@@ -552,3 +586,84 @@ void setupLogFile(){
   }
 }
 
+void writeSD(int xTime, float sTemp, float xTemp, float xPress, float xVol){
+  logFile = SD.open(fileName, FILE_WRITE);
+
+  if(logFile){
+    printValLogFile(xTime, 1, 10);
+    printValLogFile(sTemp, 1, 5);
+    printValLogFile(xTemp, 1, 5);
+    printValLogFile(xPress, 1, 5);    
+    printValLogFile(xVol, 2, 4);    
+  }
+
+  logFile.close();
+}
+
+void serveLog()  // listen for incoming clients
+{ 
+  int lastSlave = activeSlave;
+  
+  spiSlaveSelect(SPI_WIFI_SS);
+  WiFiClient client = server.available();
+  
+  if (client) {
+    if (!plotData){Serial.println("new client");}
+    // an http request ends with a blank line
+    boolean currentLineIsBlank = true;
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+        if(!plotData){Serial.write(c);}
+        // if you've gotten to the end of the line (received a newline
+        // character) and the line is blank, the http request has ended,
+        // so you can send a reply
+        if (c == '\n' && currentLineIsBlank) {
+          spiSlaveSelect(SPI_SD_SS);
+          logFile = SD.open(fileName);
+          if (logFile) {
+            if(!plotData){
+              Serial.print(fileName);
+              Serial.println(":");
+            }
+
+            // read from the file until there's nothing else in it:
+            while (logFile.available()) {
+
+              char data = logFile.read();
+              spiSlaveSelect(SPI_WIFI_SS);
+              client.print(data);
+              if(!plotData){Serial.write(data);}
+            }
+            // close the file:
+            spiSlaveSelect(SPI_SD_SS);
+            logFile.close();
+          } 
+          else {
+            // if the file didn't open, print an error:
+            if(!plotData){Serial.println("error opening test.txt");}
+          }
+          spiSlaveSelect(SPI_WIFI_SS);
+          if(!plotData){Serial.println(" done");}
+          client.println(" done"); 
+          client.println("<br />");       
+          client.println("</html>");
+          break;
+        }
+        if (c == '\n') {
+          // you're starting a new line
+          currentLineIsBlank = true;
+        } 
+        else if (c != '\r') {
+          // you've gotten a character on the current line
+          currentLineIsBlank = false;
+        }
+      }
+    }
+    // give the web browser time to receive the data
+    delay(1);
+    // close the connection:
+    client.stop();
+    if(!plotData){Serial.println("client disonnected");}
+  }
+}
