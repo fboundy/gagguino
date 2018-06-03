@@ -7,8 +7,11 @@
 #include <Wire.h>
 #include "SSD1306Ascii.h"
 #include "SSD1306AsciiWire.h"
+#include <SD.h>
 
 #define I2C_ADDRESS          0x3C     
+
+#define SPI_SLAVES              3
 
 //Digital Pins
 //#define SER_RX                0
@@ -53,16 +56,22 @@
 SSD1306AsciiWire oled;
 Adafruit_MAX31865 max = Adafruit_MAX31865(SPI_MAX_SS);
 
+// debugging flags
+
 boolean writeDebug = false;
 boolean plotData = true;
 boolean debugPID = false;
 boolean useSavedGain = false;
-
 boolean useWifi = true;
+
+// system setup
+int spiSlaves[SPI_SLAVES];
+
 char ssid[] = "Dlink12";     //  your network SSID (name) 
 char pass[] = "4d9a4d4652";    // your network password
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
 
+// PID variables
 float currTemp;
 float setTemp;
 float lastTemp;
@@ -86,15 +95,32 @@ unsigned long lastPress;
 long elapsedTime = 0;
  
 void setup() {
-  pinMode(SPI_WIFI_SS, OUTPUT);
-  pinMode(SPI_MAX_SS, OUTPUT);
-  pinMode(HEAT_RELAY, OUTPUT);
-  pinMode(PRESSURE_PIN, INPUT);
-  pinMode(FLOW_PIN, INPUT);
-  
   // initialize serial:
   Serial.begin(115200);
 
+  spiSlaves[0] = SPI_WIFI_SS;
+  spiSlaves[1] = SPI_MAX_SS;
+  spiSlaves[2] = SPI_SD_SS;
+
+  // set all SPI slave control lines to OUTPUT
+  for (int i = 0; i < SPI_SLAVES; i++){
+    pinMode(spiSlaves[i], OUTPUT);
+  }
+  
+  // set actuators to output
+  pinMode(HEAT_RELAY, OUTPUT);
+
+  // set sensors to output
+  pinMode(PRESSURE_PIN, INPUT);
+  pinMode(FLOW_PIN, INPUT);
+  
+  spiSlaveSelect(SPI_SD_SS);
+  
+  if (!SD.begin(SPI_SD_SS)) {
+    Serial.println("SD initialization failed!");
+    return;
+  }
+ 
   Wire.begin();
   Wire.setClock(400000L);
   oled.begin(&Adafruit128x64, I2C_ADDRESS);
@@ -103,43 +129,32 @@ void setup() {
   _turnHeatElementOnOff(0); 
 
   if (useWifi){
-    digitalWrite(SPI_WIFI_SS, LOW);
-  // attempt to connect using WPA2 encryption:
-//    Serial.println("Attempting to connect to WPA network...");
+      spiSlaveSelect(SPI_WIFI_SS);
     oled.println("Connecting to Wifi");
     oled.print("Network: ");
-//    display.setTextSize(2);
     oled.println(ssid);
     oled.println();
 
     status = WiFi.begin(ssid, pass);
 
-  // if you're not connected, stop here:
     if ( status != WL_CONNECTED) { 
-//      Serial.println("Couldn't get a wifi connection");
       oled.println("FAILED");
       useWifi = false;
     } 
   // if you are connected, print out info about the connection:
     else {
-//      Serial.println("Connected to network");
       oled.println("CONNECTED");
       oled.println();
   // print your WiFi shield's IP address:
       IPAddress ip = WiFi.localIP();
       oled.print("IP Address: ");
       oled.println(ip);
-//      Serial.print("IP Address: ");
-//      Serial.println(ip);
    }
   } else {
-//    Serial.println("WiFi shield disabled");
       oled.print("WiFi Disabled");
   }
  
-  digitalWrite(SPI_WIFI_SS, HIGH);  
-  digitalWrite(SPI_MAX_SS, LOW);
-  
+  spiSlaveSelect(SPI_MAX_SS);  
   max.begin(MAX31865_2WIRE);  // set to 2WIRE or 4WIRE as necessary
   
   if (!plotData){Serial.println("MAX31865: 2 Wire mode initialised");}
@@ -474,5 +489,11 @@ void dispTempPress(float t, float p){
   oled.setCursor(96,7);
   oled.println(" ml");
   
+}
+
+void spiSlaveSelect(int ss){
+  for (int i = 0; i < SPI_SLAVES; i++){
+    digitalWrite(spiSlaves[i],!(ss == i));
+  }
 }
 
