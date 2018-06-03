@@ -1,3 +1,5 @@
+//3.0 new master
+
 #include <WiFi.h>
 #include <Adafruit_MAX31865.h>
 #include <avr/EEPROM.h>
