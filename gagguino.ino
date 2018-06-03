@@ -43,9 +43,9 @@
 //PID Gains
 #define BREW_TEMP           103.0
 #define WINDUP_GUARD_GAIN      35
-#define P_GAIN                 15
-#define I_GAIN                 10
-#define D_GAIN                 40
+#define P_GAIN                  5
+#define I_GAIN                 0
+#define D_GAIN                 00
 
 #define PGAIN_ADR               0
 #define IGAIN_ADR               4
@@ -133,44 +133,46 @@ void setup() {
     oled.println("Connecting to Wifi");
     oled.print("Network: ");
     oled.println(ssid);
-    Serial.println("Connecting to Wifi ");
-    Serial.print("Network: ");
-    Serial.println(ssid);
+    if(!plotData){
+      Serial.println("Connecting to Wifi ");
+      Serial.print("Network: ");
+      Serial.println(ssid);
+    }
 
     status = WiFi.begin(ssid, pass);
 
     if ( status != WL_CONNECTED) { 
       oled.println("FAILED");
-      Serial.println("FAILED");
+      if(!plotData){Serial.println("FAILED");}
       useWifi = false;
     } 
   // if you are connected, print out info about the connection:
     else {
       oled.println("CONNECTED as ");
-      Serial.println("CONNECTED as ");
+      if(!plotData){Serial.println("CONNECTED as ");}
   // print your WiFi shield's IP address:
       IPAddress ip = WiFi.localIP();
       oled.println(ip);
-      Serial.println(ip);
+      if(!plotData){Serial.println(ip);}
       server.begin();
 
       if (useSD){
         oled.print("SD Card init: ");
-        Serial.print("SD Card init: ");
+        if(!plotData){Serial.print("SD Card init: ");}
         if (!SD.begin(SPI_SD_SS)) {
           oled.println("FAIL");
-          Serial.println("FAIL");
+          if(!plotData){Serial.println("FAIL");}
           useSD = false;
         } else { 
           oled.println("OK");
-          Serial.println("OK");
+          if(!plotData){Serial.println("OK");}
         }
         setupLogFile();
       }
     }   
   } else {
       oled.print("WiFi Disabled");
-      Serial.print("WiFi Disabled");
+      if(!plotData){Serial.print("WiFi Disabled");}
   }
  
   spiSlaveSelect(SPI_MAX_SS);  
@@ -199,12 +201,14 @@ void setup() {
     pGain = P_GAIN;
     iGain = I_GAIN;
     dGain = D_GAIN;
-    Serial.println("Using manual gains:");
-    Serial.print(pGain);
-    Serial.print(" ");
-    Serial.print(iGain);
-    Serial.print(" ");
-    Serial.println(dGain);
+    if(!plotData){
+      Serial.println("Using manual gains:");
+      Serial.print(pGain);
+      Serial.print(" ");
+      Serial.print(iGain);
+      Serial.print(" ");
+      Serial.println(dGain);
+    }
   }
   delay(2000);
   oled.clear();
@@ -262,7 +266,7 @@ void loop() {
     Serial.print(" ");
     Serial.print(currTemp);    
     Serial.print(" ");
-    Serial.println(lastTemp);    
+    Serial.print(lastTemp);    
   }
 
 //  if (useSD){
@@ -414,7 +418,7 @@ void setHeatCycles(float power){
 void maxFaults(){
   // Check and print any faults
   uint8_t fault = max.readFault();
-  if (fault) {
+  if (fault and !plotData) {
     Serial.print("Fault 0x"); Serial.println(fault, HEX);
     if (fault & MAX31865_FAULT_HIGHTHRESH) {
       Serial.println("RTD High Threshold"); 
@@ -521,9 +525,11 @@ void spiSlaveSelect(int ss){
 void setupLogFile(){
 
   oled.print("Log init: ");
-  Serial.print("Log init file ");
-  Serial.print(fileName);
-  Serial.print(": ");
+  if(!plotData){
+    Serial.print("Log init file ");
+    Serial.print(fileName);
+    Serial.print(": ");
+  }
   
   logFile = SD.open(fileName, FILE_WRITE);
 
@@ -539,9 +545,9 @@ void setupLogFile(){
     logFile.println("<meta http-equiv=\"refresh\" content=\"5\">");
     logFile.close();
     oled.println("OK");
-    Serial.println("OK");
+    if(!plotData){Serial.println("OK");}
   } else {
-    Serial.println("FAIL");
+    if(!plotData){Serial.println("FAIL");}
     oled.println("FAIL");
   }
 }
