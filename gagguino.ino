@@ -43,10 +43,10 @@
 #define TUNE_SIG                5
 
 //PID Gains
-#define BREW_TEMP           25.0
+#define BREW_TEMP           95.0
 #define WINDUP_GUARD            4
-#define P_GAIN                  50
-#define I_GAIN                  2
+#define P_GAIN                  10
+#define I_GAIN                  1
 #define D_GAIN                  200
 
 #define PGAIN_ADR               0
