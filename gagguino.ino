@@ -37,15 +37,17 @@
 //#define IC2_SDA               4
 //#define IC2_SCK               5
 
-#define PID_CYCLE             200
+#define PID_CYCLE            1000
 #define PWM_CYCLE            1000
+#define TUNE_CYCLE            100
+#define TUNE_SIG                5
 
 //PID Gains
-#define BREW_TEMP           103.0
-#define WINDUP_GUARD           25
-#define P_GAIN                 10
-#define I_GAIN                  1
-#define D_GAIN                 10
+#define BREW_TEMP           25.0
+#define WINDUP_GUARD            4
+#define P_GAIN                  50
+#define I_GAIN                  2
+#define D_GAIN                  200
 
 #define PGAIN_ADR               0
 #define IGAIN_ADR               4
@@ -60,12 +62,13 @@ WiFiServer server(80);
 // debugging flags
 
 boolean writeDebug   = false;
-boolean plotData     = false;
-boolean ardPlot      = false;
+boolean plotData     = true;
+boolean ardPlot      = true;
 boolean debugPID     = false;
+boolean tunePID      = false;
 boolean useSavedGain = false;
 boolean useWifi      = false;
-boolean useSD        = true;
+boolean useSD        = false;
 
 // system setup
 int spiSlaves[SPI_SLAVES];
@@ -84,6 +87,7 @@ float currTemp;
 float setTemp;
 float lastTemp;
 float lastPress;
+int   pwmCount;
 
 float pGain;
 float iGain;
@@ -254,80 +258,68 @@ void loop() {
 // 
 // Manual calibration suggests => C = -5.1
 
-  unsigned int  deltaTime;
-  float         tempRTD;  
-  float         tempSum = 0;
-  int           tempCount = 0;
-
-  float         pressGauge;
-  float         pressSum = 0;
-  int           pressCount = 0;
   float         currPress;
 
-  
-  spiSlaveSelect(SPI_MAX_SS);
-  tempRTD = max.temperature(RNOMINAL, RREF);
-  //  maxFaults();
 
-  if (tempRTD > -50){
-    tempSum += tempRTD;
-    tempCount ++;
-    currentTime = millis();
-    currTemp = tempSum / tempCount;
-  }
-
-  pressGauge = analogRead(PRESSURE_PIN) * 0.05476 -5.1;
-  pressSum += pressGauge;
-  pressCount ++;
-  currPress = pressSum / pressCount;
-
-  if (plotData){
-    if(!ardPlot){
-      Serial.print(currentTime);
-      Serial.print(" ");
-      Serial.print(currPress);
-      Serial.print(" ");
-      Serial.print(lastPress);
-      Serial.print(" ");
-      Serial.print(heatPower);
-      Serial.print(" ");
-    }
-    Serial.print(setTemp);
-    Serial.print(" ");
-    Serial.print(tempRTD);    
-    Serial.print(" ");
-    Serial.print(currTemp);    
-    Serial.print(" ");
-    Serial.println(lastTemp);        
-  }
-
-  if (useSD){
-    spiSlaveSelect(SPI_SD_SS);
-    writeSD(currentTime, setTemp, tempRTD, pressGauge, 0);
-  }
+  currentTime=millis();
   
   if (currentTime - lastPID >= PID_CYCLE){
+    spiSlaveSelect(SPI_MAX_SS);
+    currTemp = max.temperature(RNOMINAL, RREF);
     lastPID = currentTime;
     heatPower = updatePID();
+    if (heatPower > 100.0){heatPower = 100.0;}
+    if (heatPower < 0.0){heatPower = 0.0;}
+    heatCycles = heatPower / 100 * PWM_CYCLE;
     
     dispTempPress(currTemp, lastPress);
-
-    tempSum = 0;
-    tempCount = 0;
+    if (useSD){
+      spiSlaveSelect(SPI_SD_SS);
+      writeSD(currentTime, setTemp, currTemp, currPress, 0);  
+    }
+    if (plotData){
+      if(!ardPlot){
+        Serial.print(currentTime);
+        Serial.print(" ");
+        Serial.print(currPress);
+        Serial.print(" ");
+        Serial.print(heatPower);
+        Serial.print(" ");
+      }
+      Serial.print(setTemp);
+      Serial.print(" ");
+      Serial.println(currTemp);    
+//      Serial.print(" ");
+//      Serial.println(heatPower);
+    }
   }
 
   if (currentTime - lastPressTime >= PRESS_CYCLE){
+    currPress = analogRead(PRESSURE_PIN) * 0.05476 -5.1;
     lastPressTime = currentTime;
 
     dispTempPress(lastTemp, currPress);
 
     lastPress = currPress;
-    pressSum = 0;
-    pressCount = 0;
   }
-  
-  setHeatCycles(heatPower);
-  updatePWM();
+
+  if (currentTime - lastPWM >= heatCycles) {
+    _turnHeatElementOnOff(0);
+  }
+
+  if(currentTime - lastPWM >= PWM_CYCLE) { //second statement prevents overflow errors
+    // begin cycle
+    _turnHeatElementOnOff(1);  // 
+    lastPWM = currentTime;   
+
+    if (tunePID){
+      pwmCount++;
+      if(pwmCount == TUNE_CYCLE){
+        setTemp = (2 * BREW_TEMP - TUNE_SIG) - setTemp;
+        pwmCount = 0;
+      }
+    }
+  } 
 }
 
 
@@ -365,10 +357,10 @@ float updatePID(){
   // not necessary, but this makes windup guard values 
   // relative to the current iGain
   
-  if (iState > WINDUP_GUARD) 
-    iState = WINDUP_GUARD;
-  else if (iState < -WINDUP_GUARD) 
-    iState = -WINDUP_GUARD;
+  if (iState > WINDUP_GUARD / iGain) 
+    iState = WINDUP_GUARD / iGain;
+  else if (iState < -WINDUP_GUARD / iGain) 
+    iState = -WINDUP_GUARD / iGain;
   iTerm = iGain * iState;
 
   // the dTerm, the difference between the temperature now
@@ -381,54 +373,33 @@ float updatePID(){
   lastTemp = currTemp;
   
   if (debugPID){
-    Serial.print("Set: ");
-    Serial.print(setTemp);
-    Serial.print("  Curr: ");
-    Serial.print(currTemp);
-    Serial.print("  Err: ");
-    Serial.print(err);
-    Serial.print("  P: ");
+    Serial.print("  ");
     Serial.print(pTerm);
-    Serial.print("  I: ");
+    Serial.print("  ");
     Serial.print(iTerm);
-    Serial.print("  D: ");
-    Serial.println(dTerm);
+    Serial.print("  ");
+    Serial.print(dTerm);
+    Serial.print("  ");
+    Serial.println(pTerm + iTerm - dTerm);
   }
   // the magic feedback bit
   return  pTerm + iTerm - dTerm;
 }
 
-void updatePWM()
-{
-  unsigned int deltaPWM;
-  
-  currentTime = millis();
-  deltaPWM = currentTime - lastPWM;
-  
-  if(currentTime - lastPWM >= PWM_CYCLE or lastPWM > currentTime) { //second statement prevents overflow errors
-    // begin cycle
-    _turnHeatElementOnOff(1);  // 
-    lastPWM = currentTime;   
-  } 
-  
-  if (currentTime - lastPWM >= heatCycles) {
-    _turnHeatElementOnOff(0);
-  }
-}
 
 void _turnHeatElementOnOff(boolean on) {
   digitalWrite(HEAT_RELAY, on);     //turn pin high
   heaterState = on;
 }
 
-void setHeatCycles(float power){
+float setHeatCycles(float power){
   if (power <= 0.0) {
     power = 0.0;
   }     
   if (power >= 100.0) {
     power = 100.0;
   }
-  heatCycles = power /100 * PWM_CYCLE;  
+  return (power /100 * PWM_CYCLE);  
 }
 
 void maxFaults(){
@@ -548,10 +519,12 @@ void dispTempPress(float t, float p){
 }
 
 void spiSlaveSelect(int ss){
-  for (int i = 0; i < SPI_SLAVES; i++){
-    digitalWrite(spiSlaves[i],!(ss == i));
+  if (activeSlave != ss){
+    for (int i = 0; i < SPI_SLAVES; i++){
+      digitalWrite(spiSlaves[i],!(ss == i));
+    }
+    activeSlave = ss;
   }
-  activeSlave = ss;
 }
 
 void setupLogFile(){
