@@ -71,8 +71,8 @@ boolean useSD        = true;
 int spiSlaves[SPI_SLAVES];
 int activeSlave;
 
-char ssid[] = "Dlink12";     //  your network SSID (name) 
-char pass[] = "4d9a4d4652";    // your network password
+char ssid[] = "MySSID";     //  your network SSID (name) 
+char pass[] = "******";    // your network password
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
 
 File logFile;
