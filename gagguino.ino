@@ -118,7 +118,7 @@ long elapsedTime = 0;
  
 void setup() {
   // initialize serial:
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   spiSlaves[0] = SPI_WIFI_SS;
   spiSlaves[1] = SPI_MAX_SS;
@@ -136,12 +136,11 @@ void setup() {
   pinMode(PRESSURE_PIN, INPUT);
   pinMode(FLOW_PIN, INPUT);
   
-  spiSlaveSelect(SPI_SD_SS);
-   
-  SSD1306AsciiWire oled;
+ // spiSlaveSelect(SPI_SD_SS);
 
+  Wire.begin();
+  Wire.setClock(400000L);
   oled.begin(&SH1106_128x64, I2C_ADDRESS);
-
   oled.setFont(Adafruit5x7);
   
   _turnHeatElementOnOff(0); 
