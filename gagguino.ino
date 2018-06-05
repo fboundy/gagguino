@@ -138,12 +138,10 @@ void setup() {
   
   spiSlaveSelect(SPI_SD_SS);
    
-  Wire.begin();
-  Wire.setClock(400000L);
-  oled.begin(&Adafruit128x64, I2C_ADDRESS);
   SSD1306AsciiWire oled;
 
   oled.begin(&SH1106_128x64, I2C_ADDRESS);
+
   oled.setFont(Adafruit5x7);
   
   _turnHeatElementOnOff(0); 
