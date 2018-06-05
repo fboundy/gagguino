@@ -44,10 +44,10 @@
 
 //PID Gains
 #define BREW_TEMP           95.0
-#define WINDUP_GUARD            4
-#define P_GAIN                  10
-#define I_GAIN                  1
-#define D_GAIN                  200
+#define WINDUP_GUARD            8
+#define P_GAIN                  11
+#define I_GAIN                  2
+#define D_GAIN                  260
 
 #define PGAIN_ADR               0
 #define IGAIN_ADR               4
