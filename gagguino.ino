@@ -10,8 +10,7 @@
 #include "SSD1306AsciiWire.h"
 #include <SD.h>
 
-#define I2C_ADDRESS          0x3C     
-
+#define I2C_ADDRESS          0x3C
 #define SPI_SLAVES              3
 
 //Digital Pins
@@ -45,10 +44,10 @@
 
 //PID Gains
 #define BREW_TEMP           95.0
-#define WINDUP_GUARD            8
-#define P_GAIN                  11
-#define I_GAIN                  2
-#define D_GAIN                  260
+#define WINDUP_GUARD            20
+#define P_GAIN                  20
+#define I_GAIN                  1
+#define D_GAIN                  100
 
 #define PGAIN_ADR               0
 #define IGAIN_ADR               4
@@ -63,6 +62,7 @@ byte packetBuffer[NTP_PACKET_SIZE];   //buffer to hold incoming and outgoing pac
 
 
 SSD1306AsciiWire oled;
+
 Adafruit_MAX31865 max = Adafruit_MAX31865(SPI_MAX_SS);
 WiFiServer server(80);
 WiFiUDP Udp;
@@ -118,7 +118,7 @@ long elapsedTime = 0;
  
 void setup() {
   // initialize serial:
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   spiSlaves[0] = SPI_WIFI_SS;
   spiSlaves[1] = SPI_MAX_SS;
@@ -141,6 +141,9 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000L);
   oled.begin(&Adafruit128x64, I2C_ADDRESS);
+  SSD1306AsciiWire oled;
+
+  oled.begin(&SH1106_128x64, I2C_ADDRESS);
   oled.setFont(Adafruit5x7);
   
   _turnHeatElementOnOff(0); 
@@ -172,17 +175,18 @@ void setup() {
       oled.println(ip);
       if(!plotData){Serial.println(ip);}
 
-      Serial.println("\nStarting connection to time server...");
+      if(!plotData){Serial.println("\nStarting connection to time server...");}
       Udp.begin(localPort);
   
-      Serial.print("\nStarting connection to server...");  
+      if(!plotData){Serial.print("\nStarting connection to server...");}  
       while (!getServerTime()){
-        Serial.print(".");
+        if(!plotData){Serial.print(".");}
         delay(500);
       }
-      Serial.println("\nDone");
-      printTime();
-      
+      if(!plotData){
+        Serial.println("\nDone");
+        printTime();
+      }
       server.begin();
     }   
   } else {
@@ -666,11 +670,13 @@ void serveLog()  // listen for incoming clients
 boolean getServerTime(){
     sendNTPpacket(timeServer); // send an NTP packet to a time server
     // wait to see if a reply is available
-    Serial.print("Getting time from Time Server: ");
-    Serial.println(timeServer);
+    if(!plotData){
+      Serial.print("Getting time from Time Server: ");
+      Serial.println(timeServer);
+    }
     delay(1000);  
     if ( Udp.parsePacket() ) { 
-      Serial.println("packet received"); 
+      if(!plotData){Serial.println("packet received");} 
       // We've received a packet, read the data from it
       Udp.read(packetBuffer,NTP_PACKET_SIZE);  // read the packet into the buffer
       unsigned long secsSince1900 = getTime(packetBuffer); 
@@ -684,7 +690,7 @@ boolean getServerTime(){
 //      lastTimeUpdate = millis();
       return(true);
     } else {
-        Serial.println("packet fail"); 
+        if(!plotData){Serial.println("packet fail");}
         return(false);
     }  
 }
