@@ -61,6 +61,9 @@
 
 //#define BREW_TEMP_ADDRESS    12
 
+#define FLOW_CAL               0.246
+#define FLOW_RESET             30000  //reset the volume if there has been no flow for  > 30 secs
+
 WiFiUDP Udp;
 
 byte packetBuffer[ NTP_PACKET_SIZE];  //buffer to hold incoming and outgoing packets 
@@ -114,9 +117,13 @@ unsigned long lastPID;
 unsigned long lastPWM;
 unsigned long lastPressTime;
 unsigned long timeOffset;
+unsigned long lastPulse;
+unsigned long shotStart;
+unsigned int  shotTime;
 
 long elapsedTime = 0;
 unsigned long pulseCount;
+unsigned int lastVol;
 
 void setup() {
   // initialize serial:
@@ -136,7 +143,7 @@ void setup() {
 
   // set sensors to input
   pinMode(PRESSURE_PIN, INPUT);
-  pinMode(FLOW_PIN, INPUT);
+  pinMode(FLOW_PIN, INPUT_PULLUP);
   
  // spiSlaveSelect(SPI_SD_SS);
 
@@ -213,7 +220,7 @@ void setup() {
   delay(2000);
   oled.clear();
 
-//  attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowInt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowInt, CHANGE);
 }
 
 void loop() {
@@ -235,7 +242,16 @@ void loop() {
 
   float         currPress;
 
+
   currentTime=millis();
+
+  if (currentTime - lastPulse >= FLOW_RESET and lastVol > 0 and currentTime < lastPulse){
+    Serial.print(currentTime - lastPulse);
+    Serial.print(F(">="));
+    Serial.println(FLOW_RESET);
+    pulseCount = 0;
+    lastPulse = currentTime;
+  }
   
   if (currentTime - lastPID >= PID_CYCLE){
     spiSlaveSelect(SPI_MAX_SS);
@@ -246,12 +262,17 @@ void loop() {
     if (heatPower > 100.0){heatPower = 100.0;}
     if (heatPower < 0.0){heatPower = 0.0;}
     heatCycles = heatPower / 100 * PWM_CYCLE;
-    
-    dispTempPress(currTemp, lastPress, nLoop);
+    int vol = pulseCount * FLOW_CAL;
+    if (vol > 0 and vol > lastVol){
+      shotTime = (currentTime - shotStart) / 1000;
+    } 
+    lastVol = vol;
+
+    dispTempPress(currTemp, lastPress, vol, shotTime);
     
     if (useSD){
       spiSlaveSelect(SPI_SD_SS);
-      writeSD(currentTime, setTemp, currTemp, currPress, 0);  
+      writeSD(currentTime, setTemp, currTemp, currPress, vol);  
     }
     if (plotData){
       if(!ardPlot){
@@ -263,8 +284,12 @@ void loop() {
         Serial.print(" ");
         Serial.print(heatPower);
         Serial.print(" ");
-//        Serial.print(newHeat);
-//        Serial.print(" ");
+        Serial.print(pulseCount);
+        Serial.print(" ");
+        Serial.print(lastPulse);
+        Serial.print(" ");
+        Serial.print(vol);
+        Serial.print(" ");
       }
       Serial.print(setTemp);
       Serial.print(" ");
@@ -280,8 +305,12 @@ void loop() {
     currPress = analogRead(PRESSURE_PIN) * 0.05476 -5.1;
     if (currPress < 0){currPress = lastPress;}
     lastPressTime = currentTime;
-
-    dispTempPress(lastTemp, currPress, 0);
+    int vol = pulseCount * FLOW_CAL;
+    if (vol > 0 and vol > lastVol){
+      shotTime = (currentTime - shotStart) / 1000;
+    } 
+    dispTempPress(lastTemp, currPress, vol, shotTime);
+    lastVol = vol;
 
     lastPress = currPress;
   }
@@ -474,53 +503,57 @@ void printValLogFile(float v, int d, int p){
   logFile.print(v,d);
 }
 
-void dispTempPress(float t, float p, int n){
+void dispTempPress(float t, float p, int v, long s){
 // OLED layout
-
-  #define TEMP_X1   0
-  #define TEMP_X2  28
-  #define PRESS_X1 73
-  #define PRESS_X2 95
-  #define LABEL_Y   0
-  #define VAL_Y    10
-  #define UNIT_Y   29
-  #define TEMP_DEC                 1  // 1 decimal 
-  #define TEMP_SP                  4  // 3 spaces before decimal
-  #define PRESS_DEC                1  // 1 decimal 
-  #define PRESS_SP                 2  // 3 spaces before decimal
 
   char deg = 160;
 
   oled.home();
     
   oled.set1X();
-  oled.print(" Temp:");
+  oled.print("Temp:");
   oled.set2X();
   printValOled(t, 1, 3);
   oled.set1X();
-  oled.setCursor(96,1);
+  oled.setCursor(90,1);
   oled.print(deg);
   oled.println(" C");
   
   oled.println();
-  oled.print(" Press: ");
+  oled.print("Press: ");
   oled.set2X();
   printValOled(p, 1, 2);
   oled.set1X();
-  oled.setCursor(96,4);
+  oled.setCursor(90,4);
   oled.println(" barg");
 
   oled.println();
-  oled.print(" Flow:  ");
+  oled.print("Shot:");
   oled.set2X();
-  printValOled(0, 1, 2);
-  oled.set1X();
-  oled.setCursor(96,7);
-  oled.println(" ml");
-  if (n > 0){
-    oled.setCursor(0,7);
-    oled.println(n);
+  if (v < 100){
+    oled.print(" ");
   }
+  if (v < 10){
+    oled.print(" ");
+  }
+  oled.print(v);
+  oled.print(" ");
+  if (s < 100){
+    oled.print(" ");
+  }
+  if (s < 10){
+    oled.print(" ");
+  }
+  oled.print(s);
+  oled.set1X();
+  oled.setCursor(68,7);
+  oled.print("ml");
+  oled.setCursor(120,7);
+  oled.print("s");
+//  if (n > 0){
+//    oled.setCursor(0,7);
+//    oled.println(n);
+//  }
   
 }
 
@@ -748,6 +781,11 @@ unsigned long sendNTPpacket(IPAddress& address)
 
 void flowInt(){
   pulseCount++;
+  lastPulse = millis();
+  if (pulseCount == 1){
+    shotStart = millis();  
+    shotTime = 0; 
+  }
 }
 
 void connectWiFi(){
